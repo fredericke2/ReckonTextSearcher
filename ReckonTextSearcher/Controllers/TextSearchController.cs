@@ -2,6 +2,7 @@
 using ReckonTextSearcher.Models;
 using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -13,16 +14,18 @@ namespace ReckonTextSearcher.Controllers
 {
 	public class TextSearchController : ApiController
 	{
-		[HttpGet]
-		[Route("api/TextSearch/Search")]
-		public async Task<IHttpActionResult> Search()
+		private async Task<TextToSearch> GetInputBase()
 		{
-			int maxRetries = 10;
+			TextToSearch text = new TextToSearch();
+			int retry = 1;
 			HttpResponseMessage response = null;
-			for (int i = 0; i < maxRetries; i++)
+
+			int.TryParse(ConfigurationManager.AppSettings["RetryValue"], out retry);
+
+			for (int i = 0; i < retry; i++)
 			{
 				HttpClient httpClient = new HttpClient();
-				response = await httpClient.GetAsync("https://join.reckon.com/test2/textToSearch");
+				response = await httpClient.GetAsync(ConfigurationManager.AppSettings["InputTextBaseUrl"]);
 
 				if (response.IsSuccessStatusCode)
 				{
@@ -33,98 +36,128 @@ namespace ReckonTextSearcher.Controllers
 			if (response != null)
 			{
 				var content = await response.Content.ReadAsStringAsync();
-				TextToSearch text = JsonConvert.DeserializeObject<TextToSearch>(content);
+				 text = JsonConvert.DeserializeObject<TextToSearch>(content);
+			}
+			return text;
+		}
 
-				HttpResponseMessage response2 = null;
-				for (int i = 0; i < maxRetries; i++)
+		private async Task<Subtexts> GetSubtext()
+		{
+			Subtexts text = new Subtexts();
+			int retry = 1;
+			HttpResponseMessage response = null;
+
+			int.TryParse(ConfigurationManager.AppSettings["RetryValue"], out retry);
+
+			for (int i = 0; i < retry; i++)
+			{
+				HttpClient httpClient = new HttpClient();
+				response = await httpClient.GetAsync(ConfigurationManager.AppSettings["InputSubtextBaseUrl"]);
+
+				if (response.IsSuccessStatusCode)
 				{
-					HttpClient httpClient2 = new HttpClient();
-					response2 = await httpClient2.GetAsync("https://join.reckon.com/test2/subTexts");
-
-					if (response2.IsSuccessStatusCode)
-					{
-						break;
-					}
+					break;
 				}
+			}
 
-				if (response != null)
+			if (response != null)
+			{
+				var content = await response.Content.ReadAsStringAsync();
+				text = JsonConvert.DeserializeObject<Subtexts>(content);
+			}
+			return text;
+		}
+
+		private async Task<bool> PostResult(ResultText resultText)
+		{
+			int retry = 1;
+			HttpResponseMessage response = null;
+
+			int.TryParse(ConfigurationManager.AppSettings["RetryValue"], out retry);
+
+			for (int i = 0; i < retry; i++)
+			{
+				HttpClient httpClient = new HttpClient();
+				var json = JsonConvert.SerializeObject(resultText);
+				var data = new StringContent(json, Encoding.UTF8, "application/json");
+
+				response = await httpClient.PostAsync(ConfigurationManager.AppSettings["PostUrl"], data);
+
+				if (response.IsSuccessStatusCode)
 				{
-					var content2 = await response2.Content.ReadAsStringAsync();
-					Subtexts subtexts = JsonConvert.DeserializeObject<Subtexts>(content2);
+					break;
+				}
+			}
+			return true;
+		}
 
-					ResultText resultText = new ResultText();
-					resultText.candidate = "Frederick Escobar";
-					resultText.results = new List<SubtextResult>();
-					resultText.text = text.Text;
-					foreach (string subtext in subtexts.subTexts)
+
+		[HttpGet]
+		[Route("api/TextSearch/Search")]
+		public async Task<IHttpActionResult> Search()
+		{
+			var text = await GetInputBase();
+
+			var subtexts = await GetSubtext();
+
+			ResultText resultText = new ResultText();
+			resultText.candidate = "Frederick Escobar";
+			resultText.results = new List<SubtextResult>();
+			resultText.text = text.Text;
+			foreach (string subtext in subtexts.subTexts)
+			{
+				SubtextResult subtextResult = new SubtextResult();
+				subtextResult.subtext = subtext;
+				var index = 0;
+				var initialIndex = -1;
+				string foundIndex = "";
+				var textIndex = 0;
+				foreach(char c in text.Text)
+				{
+					textIndex++;
+					if (index != subtext.Length)
 					{
-						SubtextResult subtextResult = new SubtextResult();
-						subtextResult.subtext = subtext;
-						var index = 0;
-						var initialIndex = -1;
-						string foundIndex = "";
-						var textIndex = 0;
-						foreach(char c in text.Text)
+						if (char.ToUpper(c) == char.ToUpper(subtext[index]))
 						{
-							textIndex++;
-							if (index != subtext.Length)
+							if (index == 0)
 							{
-								if (char.ToUpper(c) == char.ToUpper(subtext[index]))
-								{
-									if (index == 0)
-									{
-										initialIndex = textIndex;
-									}
-									index++;
-								}
-								else
-								{
-									index = 0;
-									initialIndex = -1;
-								}
+								initialIndex = textIndex;
 							}
-							else
-							{
-								if (initialIndex != -1)
-								{
-									if (foundIndex != "")
-									{
-										foundIndex += ", ";
-									}
-									foundIndex += initialIndex.ToString();
-									initialIndex = -1;
-									index = 0;
-								}
-							}
-						}
-
-						if (foundIndex.Any())
-						{
-							subtextResult.result = foundIndex;
+							index++;
 						}
 						else
 						{
-							subtextResult.result = "<No Output>";
+							index = 0;
+							initialIndex = -1;
 						}
-						resultText.results.Add(subtextResult);
 					}
-
-					HttpResponseMessage response3 = null;
-					for (int i = 0; i < maxRetries; i++)
+					else
 					{
-						HttpClient httpClient3 = new HttpClient();
-						var json = JsonConvert.SerializeObject(resultText);
-						var data = new StringContent(json, Encoding.UTF8, "application/json");
-						response3 = await httpClient3.PostAsync("https://join.reckon.com/test2/submitResults", data);
-
-						if (response3.IsSuccessStatusCode)
+						if (initialIndex != -1)
 						{
-							break;
+							if (foundIndex != "")
+							{
+								foundIndex += ", ";
+							}
+							foundIndex += initialIndex.ToString();
+							initialIndex = -1;
+							index = 0;
 						}
 					}
 				}
-				
+
+				if (foundIndex.Any())
+				{
+					subtextResult.result = foundIndex;
+				}
+				else
+				{
+					subtextResult.result = "<No Output>";
+				}
+				resultText.results.Add(subtextResult);
 			}
+
+			var result = await PostResult(resultText);
 			return Ok();
 		}
 
